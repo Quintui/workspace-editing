@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronUpIcon, FolderIcon } from "lucide-react";
 import { useAui, useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
 import {
+  getPartialJsonObjectFieldState,
+  getPartialJsonObjectMeta,
+} from "assistant-stream/utils";
+import {
   FileTree,
   type FileTreeNode,
 } from "@/components/assistant-ui/elements/file-tree";
@@ -23,6 +27,22 @@ export const FILE_STAT = `${PREFIX}file_stat`;
 export const EXECUTE_COMMAND = `${PREFIX}execute_command`;
 
 export type WriteFileArgs = { path?: string; content?: string };
+
+/**
+ * Tool arguments arrive as partial JSON, so a string field is a truncated
+ * prefix of itself until it closes — `"competitors.md"` shows up as `"compet"`
+ * first. Acting on a prefix points the canvas at a path no file has, so it
+ * blanks and then reopens. Arguments that carry no streaming metadata are
+ * already final.
+ */
+function isSettled(args: object, field: string): boolean {
+  const meta = getPartialJsonObjectMeta(args as Record<symbol, unknown>);
+  if (!meta) return true;
+  return (
+    getPartialJsonObjectFieldState(args as Record<string, unknown>, [field]) ===
+    "complete"
+  );
+}
 
 export type WorkspaceFile = {
   path: string;
@@ -70,6 +90,7 @@ export function useWorkspaceFiles(): WorkspaceFile[] {
         if (part.type !== "tool-call" || part.toolName !== WRITE_FILE) continue;
         const { args, result } = part as ToolCallMessagePart<WriteFileArgs>;
         if (!args.path || result !== undefined) continue;
+        if (!isSettled(args, "path")) continue;
         inFlight.set(args.path, {
           path: args.path,
           content: args.content ?? "",

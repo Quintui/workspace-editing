@@ -22,7 +22,11 @@ function WriteFileCard({ args, status }: ToolCallMessagePartProps<WriteFileArgs>
   const { propStatus } = useToolArgsStatus<WriteFileArgs>();
   const openFile = useOpenFile();
 
-  const path = args.path ?? "Untitled";
+  // The path streams in as partial JSON, so it is a truncated prefix of itself
+  // until it closes. Naming a file before then shows a title that changes under
+  // the reader, and opens a path no file has.
+  const named = args.path !== undefined && propStatus.path !== "streaming";
+  const path = named ? args.path! : undefined;
   const content = args.content ?? "";
   const writing =
     propStatus.content === "streaming" || status.type === "running";
@@ -30,15 +34,15 @@ function WriteFileCard({ args, status }: ToolCallMessagePartProps<WriteFileArgs>
   return (
     <ArtifactCard
       className="my-1.5"
-      title={path}
+      title={path ?? "Untitled"}
       meta={`Document · ${countWords(content)} words`}
       generating={writing}
       words={countWords(content)}
       role="button"
       tabIndex={0}
-      onClick={() => openFile(path)}
+      onClick={() => path && openFile(path)}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        if ((e.key === "Enter" || e.key === " ") && path) {
           e.preventDefault();
           openFile(path);
         }
