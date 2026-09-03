@@ -79,7 +79,8 @@ export function CanvasSplitHeader({
   ...props
 }: Omit<ComponentProps<"div">, "children" | "title"> & {
   title: string;
-  version: number;
+  /** Omitted when the document has no version history to show. */
+  version?: number;
   saved: boolean;
   onCopy?: () => void;
   onClose?: () => void;
@@ -97,9 +98,11 @@ export function CanvasSplitHeader({
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
         {title}
       </span>
-      <span className={cn(mono, "text-foreground/30 shrink-0")}>
-        v{version}
-      </span>
+      {version !== undefined && (
+        <span className={cn(mono, "text-foreground/30 shrink-0")}>
+          v{version}
+        </span>
+      )}
       <span
         className={cn(
           mono,

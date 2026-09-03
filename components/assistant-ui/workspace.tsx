@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronUpIcon, FolderIcon } from "lucide-react";
-import { useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
+import { useAui, useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
 import {
   FileTree,
   type FileTreeNode,
@@ -10,54 +10,81 @@ import {
 import { mono, paper } from "@/lib/surfaces";
 import { cn } from "@/lib/utils";
 
-export const WRITE_FILE = "write_file";
-export const READ_FILE = "read_file";
-export const RUN_COMMAND = "run_command";
+// Mastra's workspace tools, as the model sees them.
+const PREFIX = "mastra_workspace_";
+export const WRITE_FILE = `${PREFIX}write_file`;
+export const READ_FILE = `${PREFIX}read_file`;
+export const EDIT_FILE = `${PREFIX}edit_file`;
+export const LIST_FILES = `${PREFIX}list_files`;
+export const GREP = `${PREFIX}grep`;
+export const MKDIR = `${PREFIX}mkdir`;
+export const DELETE = `${PREFIX}delete`;
+export const FILE_STAT = `${PREFIX}file_stat`;
+export const EXECUTE_COMMAND = `${PREFIX}execute_command`;
 
 export type WriteFileArgs = { path?: string; content?: string };
 
 export type WorkspaceFile = {
   path: string;
   content: string;
-  /** How many times the agent has written this path. */
-  version: number;
-  /** The write is still streaming in. */
+  /** The agent is still streaming this file's contents. */
   writing: boolean;
 };
 
 /**
- * Every conversation has its own workspace. Thread state is already per
- * conversation, so the file list is just the `write_file` calls in this
- * thread, last write per path winning.
+ * The conversation's files. The list is whatever is on disk in this thread's
+ * workspace directory, refetched once the agent stops working, with any
+ * in-flight `write_file` laid over the top so the canvas can stream.
  */
 export function useWorkspaceFiles(): WorkspaceFile[] {
+  const aui = useAui();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
   const messages = useAuiState((s) => s.thread.messages);
+  const [saved, setSaved] = useState<WorkspaceFile[]>([]);
 
-  return useMemo(() => {
-    const files = new Map<string, WorkspaceFile>();
+  const refresh = useCallback(async () => {
+    const item = aui.threadListItem;
+    const threadId = item.source ? item.getState().remoteId : undefined;
+    if (!threadId) {
+      setSaved([]);
+      return;
+    }
+    const res = await fetch(`/api/threads/${threadId}/files`);
+    if (!res.ok) return;
+    const files: { path: string; content: string }[] = await res.json();
+    setSaved(files.map((f) => ({ ...f, writing: false })));
+  }, [aui]);
 
+  // On thread switch and again whenever a run finishes, which is when the
+  // agent's writes have landed.
+  useEffect(() => {
+    if (!isRunning) void refresh();
+  }, [isRunning, refresh]);
+
+  // A file the agent is writing right now exists only in the tool call.
+  const streaming = useMemo(() => {
+    const inFlight = new Map<string, WorkspaceFile>();
     for (const message of messages) {
       if (message.role !== "assistant") continue;
       for (const part of message.content) {
         if (part.type !== "tool-call" || part.toolName !== WRITE_FILE) continue;
-
         const { args, result } = part as ToolCallMessagePart<WriteFileArgs>;
-        const path = args.path;
-        if (!path) continue;
-
-        files.set(path, {
-          path,
+        if (!args.path || result !== undefined) continue;
+        inFlight.set(args.path, {
+          path: args.path,
           content: args.content ?? "",
-          version: (files.get(path)?.version ?? 0) + 1,
-          // Parts read off the thread carry no status of their own; the write
-          // is in flight until the tool reports a result.
-          writing: result === undefined,
+          writing: true,
         });
       }
     }
-
-    return [...files.values()];
+    return inFlight;
   }, [messages]);
+
+  return useMemo(() => {
+    const files = new Map(saved.map((file) => [file.path, file]));
+    for (const [path, file] of streaming) files.set(path, file);
+    return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }, [saved, streaming]);
 }
 
 /** Folder headers plus one indented row per file, as the element expects. */
@@ -65,7 +92,7 @@ function toNodes(files: readonly WorkspaceFile[]): FileTreeNode[] {
   const nodes: FileTreeNode[] = [];
   const seenDirs = new Set<string>();
 
-  for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const file of files) {
     const slash = file.path.lastIndexOf("/");
     const dir = slash === -1 ? "" : file.path.slice(0, slash);
 

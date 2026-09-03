@@ -1,7 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AssistantRuntimeProvider,
+  useAui,
+  useAuiState,
+  useRemoteThreadListRuntime,
+} from "@assistant-ui/react";
 import { AssistantChatTransport, useChatRuntime } from "@assistant-ui/ai-sdk";
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { ThreadList } from "@/components/assistant-ui/elements/thread-list.aui";
@@ -10,6 +15,7 @@ import {
   OpenFileProvider,
   useArtifactCard,
 } from "@/components/assistant-ui/artifact";
+import { useMastraThreadListAdapter } from "@/components/assistant-ui/mastra-threads";
 import { SessionToolTimeline } from "@/components/assistant-ui/tool-timeline";
 import {
   useWorkspaceFiles,
@@ -19,9 +25,15 @@ import { cn } from "@/lib/utils";
 
 const THREAD_COMPONENTS = { ToolGroup: SessionToolTimeline };
 
+const transport = new AssistantChatTransport({ api: "/api/chat" });
+
+const useThreadRuntime = () => useChatRuntime({ transport });
+
 export const Assistant = () => {
-  const runtime = useChatRuntime({
-    transport: new AssistantChatTransport({ api: "/api/chat" }),
+  // Conversations come from Mastra memory, not assistant-ui cloud.
+  const runtime = useRemoteThreadListRuntime({
+    adapter: useMastraThreadListAdapter(),
+    runtimeHook: useThreadRuntime,
   });
 
   return (
@@ -37,9 +49,26 @@ const Workbench = () => {
   const [treeExpanded, setTreeExpanded] = useState(true);
 
   // Nothing to show a workspace for on the new-chat screen.
-  const isNewChat = useAuiState((s) => s.thread.messages.length === 0);
+  const noMessages = useAuiState((s) => s.thread.messages.length === 0);
+  const isNewChat = noMessages && files.length === 0;
 
   useArtifactCard();
+
+  // Mastra names a thread from its first exchange, server-side, so the sidebar
+  // only learns the title on the next refresh of the list. Title generation
+  // finishes shortly after the stream closes, hence the second pass.
+  const aui = useAui();
+  const isRunning = useAuiState((s) => s.thread.isRunning);
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = wasRunning.current && !isRunning;
+    wasRunning.current = isRunning;
+    if (!justFinished) return;
+
+    void aui.threads.reload();
+    const timer = setTimeout(() => void aui.threads.reload(), 2000);
+    return () => clearTimeout(timer);
+  }, [isRunning, aui]);
 
   // The canvas needs the room, so opening a file folds the tree to its pill.
   const openFile = useCallback((path: string) => {

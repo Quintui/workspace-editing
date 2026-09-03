@@ -3,8 +3,12 @@
 import { useState } from "react";
 import {
   FileSearchIcon,
+  FolderTreeIcon,
+  InfoIcon,
   PenLineIcon,
+  SearchIcon,
   TerminalIcon,
+  Trash2Icon,
   type LucideIcon,
 } from "lucide-react";
 import { useAuiState, type PartState } from "@assistant-ui/react";
@@ -14,26 +18,39 @@ import {
   type TimelineStep,
 } from "@/components/assistant-ui/elements/tool-timeline";
 import {
+  DELETE,
+  EDIT_FILE,
+  EXECUTE_COMMAND,
+  FILE_STAT,
+  GREP,
+  LIST_FILES,
+  MKDIR,
   READ_FILE,
-  RUN_COMMAND,
   WRITE_FILE,
 } from "@/components/assistant-ui/workspace";
 
 const TOOL_META: Record<string, { verb: string; icon: LucideIcon }> = {
   [READ_FILE]: { verb: "Read", icon: FileSearchIcon },
   [WRITE_FILE]: { verb: "Wrote", icon: PenLineIcon },
-  [RUN_COMMAND]: { verb: "Ran", icon: TerminalIcon },
+  [EDIT_FILE]: { verb: "Edited", icon: PenLineIcon },
+  [LIST_FILES]: { verb: "Listed", icon: FolderTreeIcon },
+  [MKDIR]: { verb: "Created", icon: FolderTreeIcon },
+  [DELETE]: { verb: "Deleted", icon: Trash2Icon },
+  [FILE_STAT]: { verb: "Checked", icon: InfoIcon },
+  [GREP]: { verb: "Searched", icon: SearchIcon },
+  [EXECUTE_COMMAND]: { verb: "Ran", icon: TerminalIcon },
 };
 
 type ToolPart = Extract<PartState, { type: "tool-call" }>;
-type ToolArgs = { path?: string; command?: string };
+type ToolArgs = { path?: string; command?: string; pattern?: string };
 
 const toStep = (part: ToolPart): TimelineStep => {
   const meta = TOOL_META[part.toolName];
   const args = part.args as ToolArgs;
   return {
-    verb: meta?.verb ?? part.toolName,
-    chip: args.path ?? args.command ?? part.toolCallId,
+    // Tools the agent brings itself keep their raw name rather than a verb.
+    verb: meta?.verb ?? part.toolName.replace("mastra_workspace_", ""),
+    chip: args.path ?? args.command ?? args.pattern ?? part.toolCallId,
     icon: meta?.icon ?? TerminalIcon,
   };
 };

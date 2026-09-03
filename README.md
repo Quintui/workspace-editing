@@ -1,20 +1,84 @@
 # workspace-editing
 
 A chat interface that is a window onto an agent's workspace, built with
-[assistant-ui](https://assistant-ui.com) primitives.
+[assistant-ui](https://assistant-ui.com) primitives and [Mastra](https://mastra.ai).
 
 Instead of giving the model a growing pile of bespoke tools, the agent gets a
-computer: a filesystem it reads, writes, and runs commands against. A document
-is not a special object owned by the frontend — it is a file in the agent's
-workspace, and the canvas is a view onto that file.
+computer: a directory it reads, writes, and runs commands in. A document is not
+a special object owned by the frontend — it is a file in the agent's workspace,
+and the canvas is a view onto that file.
 
-> **Status:** UI only. The chat endpoint is a placeholder that streams a scripted
-> run so the interface can be built without a model or a sandbox. The agent
-> (Mastra) and the sandbox (Daytona) are not wired up yet.
+Each conversation gets its own workspace. Thread `abc` writes to
+`workspace/abc/`, and only the agent working in that thread can see it.
 
-## What's here
+## Running it
 
-| Area | Built from |
+```bash
+npm install
+echo 'OPENROUTER_API_KEY=sk-or-...' >> .env.local
+npm run dev
+```
+
+The default model is `openrouter/openai/gpt-5.6-luna`. Point `MASTRA_MODEL` at
+any model in Mastra's router — `anthropic/claude-sonnet-5`, `openai/gpt-5.6-sol`
+— and set that provider's key instead.
+
+Two things appear on first run and are both gitignored: `mastra.db`, holding
+conversations and messages, and `workspace/`, holding the agent's files.
+
+## How it fits together
+
+| Layer | What it is |
+| --- | --- |
+| Interface | assistant-ui primitives, in `app/assistant.tsx` and `components/assistant-ui/` |
+| Agent | a Mastra `Agent` with `Memory` and a `Workspace`, in `mastra/` |
+| Computer | `LocalSandbox` for the shell, `LocalFilesystem` for the files |
+| Storage | `LibSQLStore` writing to `mastra.db` |
+
+`app/api/chat/route.ts` streams the agent through `handleChatStream` in AI SDK
+v7 format, which is what `AssistantChatTransport` on the client speaks.
+
+### Per-conversation workspaces
+
+The agent's `Workspace` resolves its filesystem and sandbox per request from the
+thread id on the request context:
+
+```ts
+new Workspace({
+  filesystem: (ctx) => new LocalFilesystem({ basePath: threadDir(ctx) }),
+  sandbox: async (ctx) => { /* LocalSandbox in the same directory */ },
+  sandboxCacheKey: ({ requestContext }) => requestContext.get(MASTRA_THREAD_ID_KEY),
+})
+```
+
+The chat route sets that thread id from the request body, where
+`AssistantChatTransport` puts the thread's remote id. Deleting a conversation
+deletes its directory too.
+
+Sandbox commands run under Seatbelt on macOS or Bubblewrap on Linux when either
+is available, confined to the thread's directory with network access left on. If
+neither is available, `LocalSandbox` falls back to running commands directly on
+the host with this process's permissions.
+
+### Conversations
+
+The thread list is backed by Mastra memory, not assistant-ui cloud. A
+`RemoteThreadListAdapter` in `components/assistant-ui/mastra-threads.tsx` maps
+the sidebar onto `memory.listThreads()`, `createThread`, `updateThread`, and
+`deleteThread` over `/api/threads`. Switching conversations replays history
+through `memory.recall()`; nothing is written from the client, because the
+agent's memory already persists every message server-side. Titles are generated
+by Mastra (`generateTitle: true`) once the first exchange is saved.
+
+### The workspace view
+
+The tree and canvas read the thread's directory over `/api/threads/:id/files`,
+refetched whenever a run finishes — so they show what is actually on disk, not
+what the transcript happens to mention. A `write_file` that is still streaming
+is laid over the top, which is what makes a document appear in the canvas
+character by character as the agent writes it.
+
+| Piece | Built from |
 | --- | --- |
 | Conversation list | `ThreadListPrimitive`, `ThreadListItemPrimitive` |
 | Thread, composer, messages | `ThreadPrimitive`, `MessagePrimitive`, `ComposerPrimitive`, `ActionBarPrimitive`, `BranchPickerPrimitive` |
@@ -24,33 +88,9 @@ workspace, and the canvas is a view onto that file.
 | Workspace tree | the `file-tree` element, floating over the thread |
 | Document canvas | the `canvas-split` element |
 
-Each conversation has its own workspace. Thread state is already per
-conversation, so the file list is simply that thread's `write_file` calls.
-
-A file the agent starts writing opens on the canvas immediately and streams in.
-Files can also be opened from the floating workspace tree or from the artifact
-card in the conversation.
-
-There is no cloud persistence — threads live in memory for the life of the page.
-
-## Running it
-
-```bash
-npm install
-npm run dev
-```
-
-No API key is needed while the placeholder endpoint is in place.
-
-## Replacing the placeholder
-
-`app/api/chat/route.ts` streams a canned run over the AI SDK UI message stream.
-Swap the body of `execute` for the Mastra agent; the wire format stays the same.
-The frontend recognises three tools:
-
-- `write_file` (`path`, `content`) — renders an artifact card and the canvas
-- `read_file` (`path`) — a timeline step
-- `run_command` (`command`) — a timeline step
+`write_file` renders as its own artifact card outside the chain-of-thought
+because its tool UI is registered with `display: "standalone"`; every other
+workspace tool falls into the timeline.
 
 ## Notes on the vendored elements
 
@@ -61,6 +101,8 @@ are meant to be edited. A few carry local changes:
   reads and writes the same file; keyed by index instead.
 - `file-tree.tsx` — added row selection, an optional header action, and made the
   diff totals optional, since this is a file browser rather than a diff summary.
+- `canvas-split.tsx` — the version badge is optional; a file on disk has no
+  version history to show.
 - `reasoning.tsx` — defaults to the borderless `ghost` variant with a
   timeline-style trigger.
 - `tool-fallback.aui.tsx` — the registry ships ahead of the published

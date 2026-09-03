@@ -13,6 +13,12 @@
       "skillPath": "assistant-ui/skills/markdown/SKILL.md",
       "computedHash": "1ec28d7895066a4b60f56ec8d101f16d4272f31c92f13421c71cfadcab35b91f"
     },
+    "mastra": {
+      "source": "mastra-ai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mastra/SKILL.md",
+      "computedHash": "6482dad39fb72d1fe9d02078c15c3ee708774fd026a8557b4c7dc37fb554977a"
+    },
     "primitives": {
       "source": "assistant-ui/skills",
       "sourceType": "github",

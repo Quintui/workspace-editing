@@ -27,7 +27,6 @@ export function Canvas({
     <CanvasSplitDocument className="h-full min-h-0">
       <CanvasSplitHeader
         title={file.path}
-        version={file.version}
         saved={!file.writing}
         onCopy={() => navigator.clipboard.writeText(file.content)}
         onClose={onClose}
