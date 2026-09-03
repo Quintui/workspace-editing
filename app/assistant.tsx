@@ -44,7 +44,7 @@ export const Assistant = () => {
 };
 
 const Workbench = () => {
-  const files = useWorkspaceFiles();
+  const { files, refresh } = useWorkspaceFiles();
   const [openPath, setOpenPath] = useState<string>();
   const [treeExpanded, setTreeExpanded] = useState(true);
 
@@ -111,6 +111,7 @@ const Workbench = () => {
               files={files}
               selectedPath={openPath}
               onSelectFile={openFile}
+              onFilesAdded={refresh}
               expanded={treeExpanded}
               onExpandedChange={setTreeExpanded}
             />

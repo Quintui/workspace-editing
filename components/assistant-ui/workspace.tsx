@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronUpIcon, FolderIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronUpIcon, FolderIcon, PlusIcon } from "lucide-react";
 import { useAui, useAuiState, type ToolCallMessagePart } from "@assistant-ui/react";
 import {
   getPartialJsonObjectFieldState,
@@ -56,7 +56,10 @@ export type WorkspaceFile = {
  * workspace directory, refetched once the agent stops working, with any
  * in-flight `write_file` laid over the top so the canvas can stream.
  */
-export function useWorkspaceFiles(): WorkspaceFile[] {
+export function useWorkspaceFiles(): {
+  files: WorkspaceFile[];
+  refresh: () => void;
+} {
   const aui = useAui();
   const isRunning = useAuiState((s) => s.thread.isRunning);
   const messages = useAuiState((s) => s.thread.messages);
@@ -101,11 +104,58 @@ export function useWorkspaceFiles(): WorkspaceFile[] {
     return inFlight;
   }, [messages]);
 
-  return useMemo(() => {
-    const files = new Map(saved.map((file) => [file.path, file]));
-    for (const [path, file] of streaming) files.set(path, file);
-    return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+  const files = useMemo(() => {
+    const merged = new Map(saved.map((file) => [file.path, file]));
+    for (const [path, file] of streaming) merged.set(path, file);
+    return [...merged.values()].sort((a, b) => a.path.localeCompare(b.path));
   }, [saved, streaming]);
+
+  return { files, refresh };
+}
+
+/**
+ * Puts the user's own files in the workspace. A file dropped before the first
+ * message has no thread to land in yet, so the conversation is created first.
+ */
+function useAddFiles(onAdded: () => void) {
+  const aui = useAui();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const addFiles = useCallback(
+    async (list: FileList | null) => {
+      if (!list?.length) return;
+      setBusy(true);
+      setError(undefined);
+      try {
+        const item = aui.threadListItem;
+        const threadId =
+          (item.source ? item.getState().remoteId : undefined) ??
+          (await item.initialize()).remoteId;
+
+        const body = new FormData();
+        for (const file of list) body.append("file", file);
+
+        const res = await fetch(`/api/threads/${threadId}/files`, {
+          method: "POST",
+          body,
+        });
+        if (!res.ok) {
+          const failure = await res.json().catch(() => null);
+          setError(failure?.error ?? "Could not add the file");
+          return;
+        }
+        onAdded();
+      } catch {
+        setError("Could not add the file");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [aui, onAdded],
+  );
+
+  return { addFiles, busy, error };
 }
 
 /** Folder headers plus one indented row per file, as the element expects. */
@@ -135,12 +185,14 @@ function toNodes(files: readonly WorkspaceFile[]): FileTreeNode[] {
 
 /**
  * The conversation's files, floating over the thread. Collapses to a pill so
- * it can share the screen with an open canvas.
+ * it can share the screen with an open canvas. Files can be dropped on it or
+ * picked from its add button.
  */
 export function WorkspaceTree({
   files,
   selectedPath,
   onSelectFile,
+  onFilesAdded,
   expanded,
   onExpandedChange,
   className,
@@ -148,10 +200,16 @@ export function WorkspaceTree({
   files: readonly WorkspaceFile[];
   selectedPath?: string;
   onSelectFile: (path: string) => void;
+  /** Called once the user's files have landed in the workspace. */
+  onFilesAdded: () => void;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   className?: string;
 }) {
+  const { addFiles, busy, error } = useAddFiles(onFilesAdded);
+  const [over, setOver] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+
   if (!expanded) {
     return (
       <button
@@ -175,43 +233,90 @@ export function WorkspaceTree({
     );
   }
 
-  const header = (
-    <button
-      type="button"
-      onClick={() => onExpandedChange(false)}
-      aria-expanded
-      aria-label="Collapse workspace"
-      className="text-foreground/40 hover:text-foreground/80 -me-1 rounded p-0.5 transition-colors"
-    >
-      <ChevronUpIcon className="size-3.5" />
-    </button>
+  const actions = (
+    <div className="flex items-center gap-0.5">
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          void addFiles(e.target.files);
+          // Cleared so picking the same file twice still fires a change.
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => picker.current?.click()}
+        disabled={busy}
+        aria-label="Add files"
+        title="Add files"
+        className="text-foreground/40 hover:text-foreground/80 rounded p-0.5 transition-colors disabled:opacity-40"
+      >
+        <PlusIcon className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => onExpandedChange(false)}
+        aria-expanded
+        aria-label="Collapse workspace"
+        className="text-foreground/40 hover:text-foreground/80 -me-1 rounded p-0.5 transition-colors"
+      >
+        <ChevronUpIcon className="size-3.5" />
+      </button>
+    </div>
   );
 
-  if (files.length === 0) {
-    return (
-      <div className={cn(paper, "w-56 rounded-2xl p-3.5 shadow-lg", className)}>
-        <div className="flex items-center justify-between px-1">
-          <p className="text-[13.5px] font-medium">Workspace</p>
-          {header}
-        </div>
-        <p className="text-muted-foreground px-1 pt-1 text-[13px]">
-          Create a file to start
-        </p>
-      </div>
-    );
-  }
-
+  const ring = over ? "ring-foreground/25 ring-2" : undefined;
   const nodes = toNodes(files);
 
   return (
-    <FileTree
-      className={cn("w-56 shadow-lg", className)}
-      label="Workspace"
-      action={header}
-      nodes={nodes}
-      visibleCount={nodes.length}
-      selectedPath={selectedPath}
-      onSelectFile={onSelectFile}
-    />
+    <div
+      className={cn("flex w-56 flex-col gap-1", className)}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setOver(true);
+      }}
+      // Moving onto a child fires dragleave on the parent, so only a move that
+      // actually left the card counts.
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setOver(false);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        void addFiles(e.dataTransfer.files);
+      }}
+    >
+      {files.length === 0 ? (
+        <div className={cn(paper, "rounded-2xl p-3.5 shadow-lg", ring)}>
+          <div className="flex items-center justify-between px-1">
+            <p className="text-[13.5px] font-medium">Workspace</p>
+            {actions}
+          </div>
+          <p className="text-muted-foreground px-1 pt-1 text-[13px]">
+            {busy ? "Adding\u2026" : "Drop a file in, or ask for one"}
+          </p>
+        </div>
+      ) : (
+        <FileTree
+          className={cn("w-full shadow-lg", ring)}
+          label="Workspace"
+          action={actions}
+          nodes={nodes}
+          visibleCount={nodes.length}
+          selectedPath={selectedPath}
+          onSelectFile={onSelectFile}
+        />
+      )}
+      {error && (
+        <p className="px-2 text-[12px] text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

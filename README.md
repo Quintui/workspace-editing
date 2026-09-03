@@ -78,6 +78,12 @@ what the transcript happens to mention. A `write_file` that is still streaming
 is laid over the top, which is what makes a document appear in the canvas
 character by character as the agent writes it.
 
+Files go the other way too: drop them on the tree, or use its add button, and
+they `POST` to the same route and land in the thread's directory. There is no
+separate notion of an upload — the agent picks them up with the same
+`read_file` it uses on its own work. Text only, up to 200KB, and an added file
+never overwrites one already there.
+
 | Piece | Built from |
 | --- | --- |
 | Conversation list | `ThreadListPrimitive`, `ThreadListItemPrimitive` |
